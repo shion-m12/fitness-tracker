@@ -8,10 +8,11 @@ st.set_page_config(page_title="筋トレ記録", layout="centered")
 st.title("筋トレ記録 & 協力メーター")
 
 # --- スプレッドシート接続 ---
-url = "https://docs.google.com/spreadsheets/d/19T5OnYjgOsWX05mQ1fc5IOJ1qd98jCB_5mnd_mKNyDw/edit?usp=sharing"
+# URLを直接書くのではなく、Secretsの設定を読み込むようにします
 conn = st.connection("gsheets", type=GSheetsConnection)
-df = conn.read(spreadsheet=url, ttl=0)
 
+# データの読み込み（ここもurlを直接指定せず、connにお任せします）
+df = conn.read(ttl=0)
 # データの型変換と日付の処理
 if not df.empty:
     df['数値'] = pd.to_numeric(df['数値'], errors='coerce').fillna(0)
@@ -102,3 +103,4 @@ with tab4:
         st.subheader(f"{history_month} の合計データ")
         summary = display_df.groupby(['種目', '名前'])['数値'].sum().unstack().fillna(0)
         st.table(summary)
+
