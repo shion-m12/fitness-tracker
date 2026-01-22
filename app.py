@@ -84,3 +84,4 @@ with tab4:
         df_h['年月'] = pd.to_datetime(df_h['日付']).dt.strftime("%Y年%m月")
         selected_month = st.selectbox("表示月を選択", sorted(df_h['年月'].unique(), reverse=True))
         st.dataframe(df_h[df_h['年月'] == selected_month].sort_values('日付', ascending=False))
+
