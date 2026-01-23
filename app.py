@@ -6,6 +6,7 @@ from google.oauth2.service_account import Credentials
 from streamlit_calendar import calendar
 from linebot import LineBotApi
 from linebot.models import TextSendMessage
+from linebot.exceptions import LineBotApiError
 
 # --- ページ設定 ---
 st.set_page_config(page_title="筋トレ記録", layout="centered")
@@ -26,24 +27,27 @@ def connect_to_gsheets():
             client = gspread.authorize(creds)
             return client.open_by_url(SPREADSHEET_URL).sheet1
         else:
-            st.error("Secretsの設定が見つかりません")
             return None
     except Exception as e:
-        st.error(f"接続エラー: {e}")
+        st.error(f"スプレッドシート接続エラー: {e}")
         return None
 
 worksheet = connect_to_gsheets()
-# 接続できなくてもカレンダーだけは表示させるためにstopしない（エラー表示のみ）
 
-# --- LINE送信関数 ---
+# --- LINE送信関数（エラー詳細表示版） ---
 def send_line_broadcast(message_text):
     try:
         if "line" in st.secrets["connections"] and "access_token" in st.secrets["connections"]["line"]:
             token = st.secrets["connections"]["line"]["access_token"]
             line_bot_api = LineBotApi(token)
             line_bot_api.broadcast(TextSendMessage(text=message_text))
+            return True, "送信成功"
+        else:
+            return False, "SecretsにLINEトークンが設定されていません"
+    except LineBotApiError as e:
+        return False, f"LINE APIエラー: {e.message}"
     except Exception as e:
-        st.warning(f"LINE送信エラー: {e}")
+        return False, f"予期せぬエラー: {e}"
 
 # --- データの読み込み ---
 df = pd.DataFrame()
@@ -59,13 +63,22 @@ try:
                 df['日付_str'] = df['日付'].dt.strftime('%Y-%m-%d')
                 df['年月'] = df['日付'].dt.strftime("%Y-%m")
 except Exception:
-    pass # 読み込み失敗時は空のまま進む
+    pass
 
 # --- 共通設定 ---
 today = datetime.date.today()
 current_month = today.strftime("%Y-%m")
 goals = {"プランク": 100, "腹筋": 1000, "レッグレイズ": 1000}
 user = st.sidebar.radio("ユーザーを選択", ["士温", "咲希"])
+
+# ★LINEテスト機能（サイドバーに追加）★
+with st.sidebar.expander("🔧 LINE接続テスト"):
+    if st.button("テスト送信"):
+        success, msg = send_line_broadcast("これはテスト通知です🔔")
+        if success:
+            st.success(msg)
+        else:
+            st.error(msg)
 
 tab1, tab2, tab3, tab4 = st.tabs(["📊 協力メーター", "📅 カレンダー", "📝 記録する", "📜 分析・履歴"])
 
@@ -74,25 +87,19 @@ with tab1:
     st.header(f"{current_month} の進捗")
     if not df.empty and '年月' in df.columns:
         month_df = df[df['年月'] == current_month]
-        if not month_df.empty:
-            for menu, goal in goals.items():
-                current_sum = month_df[month_df['種目'] == menu]['数値'].sum()
-                progress = min(float(current_sum) / goal, 1.0)
-                st.write(f"**{menu}**: {int(current_sum)} / {goal}")
-                st.progress(progress)
-        else:
-            st.info("今月のデータはまだありません")
+        for menu, goal in goals.items():
+            current_sum = month_df[month_df['種目'] == menu]['数値'].sum()
+            progress = min(float(current_sum) / goal, 1.0)
+            st.write(f"**{menu}**: {int(current_sum)} / {goal}")
+            st.progress(progress)
     else:
-        st.info("データがありません。まずは記録してみましょう！")
+        st.info("データがありません")
 
-# --- タブ2: カレンダー（修正版：データなしでも表示） ---
+# --- タブ2: カレンダー ---
 with tab2:
     st.header("トレーニングカレンダー")
     
-    # 1. イベントリストを初期化（データがなくても空リストを用意）
     calendar_events = []
-    
-    # 2. データがある場合のみイベントを追加
     if not df.empty and '日付_str' in df.columns:
         summary = df.groupby(['日付_str', '名前']).size().reset_index()
         for _, row in summary.iterrows():
@@ -107,21 +114,20 @@ with tab2:
                 "borderColor": color
             })
 
-    # 3. カレンダーオプション設定
+    # PCで見れない問題対策：高さ指定を固定ピクセルにする
     calendar_options = {
         "headerToolbar": {
-            "left": "prev,next today",
+            "left": "today",
             "center": "title",
-            "right": "dayGridMonth"
+            "right": "prev,next"
         },
         "initialView": "dayGridMonth",
         "locale": "ja",
-        "height": 500,
-        "contentHeight": "auto"
+        "height": "600px", # これでPCでも高さが確保されます
     }
     
-    # 4. データの有無に関わらずカレンダーを描画（インデントをifの外に出しました）
-    calendar(events=calendar_events, options=calendar_options)
+    # keyを設定して再描画を促す
+    calendar(events=calendar_events, options=calendar_options, key="gym_calendar")
 
 # --- タブ3: 記録する ---
 with tab3:
@@ -141,25 +147,24 @@ with tab3:
                 # LINE通知
                 emoji = "💪" if user == "士温" else "🌸"
                 msg = f"{emoji} {user} が記録しました！\n\n📝 メニュー: {menu_choice}\n🔢 回数: {value} {unit}\n📅 日付: {date_str}"
-                send_line_broadcast(msg)
                 
-                st.success("✅ 保存＆LINE通知しました！")
+                success, err_msg = send_line_broadcast(msg)
+                
+                if success:
+                    st.success("✅ 保存＆LINE通知しました！")
+                else:
+                    st.warning(f"✅ 保存しましたが、LINE通知に失敗しました。\n理由: {err_msg}")
+                    
                 st.balloons()
                 st.rerun()
             except Exception as e:
                 st.error(f"保存失敗: {e}")
         else:
-            st.error("スプレッドシートに接続できていません")
+            st.error("スプレッドシート未接続")
 
 # --- タブ4: 分析・履歴 ---
 with tab4:
-    st.header("🏆 分析・履歴")
-    if not df.empty and '日付' in df.columns:
+    if not df.empty:
         st.subheader("👤 個人の累計")
         st.table(df.pivot_table(index='種目', columns='名前', values='数値', aggfunc='sum').fillna(0).astype(int))
-        
-        st.divider()
-        with st.expander("全データ履歴"):
-            st.dataframe(df[['日付_str', '名前', '種目', '数値']].sort_values('日付_str', ascending=False))
-    else:
-        st.write("データが記録されるとここに分析が表示されます")
+        st.dataframe(df.sort_values('日付_str', ascending=False))
