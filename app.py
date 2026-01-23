@@ -95,11 +95,13 @@ with tab1:
     else:
         st.info("データがありません")
 
-# --- タブ2: カレンダー ---
+# --- タブ2: カレンダー（PC表示対策版） ---
 with tab2:
     st.header("トレーニングカレンダー")
     
     calendar_events = []
+    
+    # データがある場合のみイベントを作成
     if not df.empty and '日付_str' in df.columns:
         summary = df.groupby(['日付_str', '名前']).size().reset_index()
         for _, row in summary.iterrows():
@@ -114,20 +116,24 @@ with tab2:
                 "borderColor": color
             })
 
-    # PCで見れない問題対策：高さ指定を固定ピクセルにする
+    # 【PC対策のポイント】
+    # 1. heightを "auto" ではなく "600px" と文字で指定する
     calendar_options = {
         "headerToolbar": {
-            "left": "today",
-            "center": "title",
-            "right": "prev,next"
+            "left": "today",       # 左に「今日」ボタン
+            "center": "title",     # 真ん中に月名
+            "right": "prev,next"   # 右に「前月・次月」
         },
         "initialView": "dayGridMonth",
         "locale": "ja",
-        "height": "600px", # これでPCでも高さが確保されます
+        "height": "600px",         # ⚠️重要：PC用に高さを固定する
+        "selectable": True,
     }
     
-    # keyを設定して再描画を促す
-    calendar(events=calendar_events, options=calendar_options, key="gym_calendar")
+    # 【最重要】
+    # 2. key="calendar_tab" を追加する
+    # これがないと、PCでタブを切り替えた時に「描画済み」と勘違いして消えることがあります
+    calendar(events=calendar_events, options=calendar_options, key="calendar_tab")
 
 # --- タブ3: 記録する ---
 with tab3:
@@ -168,3 +174,4 @@ with tab4:
         st.subheader("👤 個人の累計")
         st.table(df.pivot_table(index='種目', columns='名前', values='数値', aggfunc='sum').fillna(0).astype(int))
         st.dataframe(df.sort_values('日付_str', ascending=False))
+
