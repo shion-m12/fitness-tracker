@@ -2,9 +2,11 @@ import streamlit as st
 import pandas as pd
 import datetime
 import gspread
-import requests
 from google.oauth2.service_account import Credentials
 from streamlit_calendar import calendar
+# LINE Messaging API SDK
+from linebot import LineBotApi
+from linebot.models import TextSendMessage
 
 # --- ページ設定 ---
 st.set_page_config(page_title="筋トレ記録", layout="centered")
@@ -30,19 +32,18 @@ def connect_to_gsheets():
 worksheet = connect_to_gsheets()
 if not worksheet: st.stop()
 
-# --- LINE通知関数 ---
-def send_line_notify(message):
+# --- LINE Messaging API 送信関数 ---
+def send_line_broadcast(message_text):
     try:
-        if "line" in st.secrets["connections"] and "token" in st.secrets["connections"]["line"]:
-            token = st.secrets["connections"]["line"]["token"]
-            url = "https://notify-api.line.me/api/notify"
-            headers = {"Authorization": f"Bearer {token}"}
-            data = {"message": message}
-            requests.post(url, headers=headers, data=data)
+        if "line" in st.secrets["connections"] and "access_token" in st.secrets["connections"]["line"]:
+            token = st.secrets["connections"]["line"]["access_token"]
+            line_bot_api = LineBotApi(token)
+            # ブロードキャスト（友達登録している全員＝二人に一斉送信）
+            line_bot_api.broadcast(TextSendMessage(text=message_text))
         else:
-            print("LINEトークンが設定されていません")
+            print("LINEアクセストークンが設定されていません")
     except Exception as e:
-        print(f"LINE送信エラー: {e}")
+        st.warning(f"LINE送信エラー（記録は保存されました）: {e}")
 
 # --- データの読み込み ---
 try:
@@ -51,13 +52,12 @@ try:
     
     if not df.empty:
         df['数値'] = pd.to_numeric(df['数値'], errors='coerce').fillna(0)
-        # カレンダー用に日付を文字列化（エラー防止のため変換を強化）
         if '日付' in df.columns:
+            # 日付処理の強化
             df['日付'] = pd.to_datetime(df['日付'], errors='coerce')
+            df = df.dropna(subset=['日付']) # 無効な日付を削除
             df['日付_str'] = df['日付'].dt.strftime('%Y-%m-%d')
             df['年月'] = df['日付'].dt.strftime("%Y-%m")
-            # 日付が無効なデータ（NaT）を除外
-            df = df.dropna(subset=['日付'])
     else:
         df = pd.DataFrame(columns=['日付', '名前', '種目', '数値', '単位', '日付_str', '年月'])
 
@@ -86,44 +86,31 @@ with tab1:
     else:
         st.info("データがありません")
 
-# --- タブ2: カレンダー（修正強化版） ---
+# --- タブ2: カレンダー ---
 with tab2:
     st.header("トレーニングカレンダー")
-    
     calendar_events = []
-    # データが存在する場合のみイベントを作成
     if not df.empty and '日付_str' in df.columns:
         summary = df.groupby(['日付_str', '名前']).size().reset_index()
         for _, row in summary.iterrows():
             emoji = "🔵" if row['名前'] == "士温" else "🌸"
             color = "#1E90FF" if row['名前'] == "士温" else "#FF69B4"
-            
             calendar_events.append({
                 "title": emoji,
-                "start": row['日付_str'],
-                "end": row['日付_str'],
-                "allDay": True,
-                "backgroundColor": color,
-                "borderColor": color
+                "start": row['日付_str'], "end": row['日付_str'], "allDay": True,
+                "backgroundColor": color, "borderColor": color
             })
 
-    # カレンダーのオプション（データがなくてもカレンダー枠を表示）
     calendar_options = {
-        "headerToolbar": {
-            "left": "prev,next today",
-            "center": "title",
-            "right": "dayGridMonth"
-        },
+        "headerToolbar": {"left": "prev,next today", "center": "title", "right": "dayGridMonth"},
         "initialView": "dayGridMonth",
         "locale": "ja",
-        "height": 550,  # 高さを確保
+        "height": 550,
         "contentHeight": "auto"
     }
-    
-    # イベントが空でもカレンダー自体は描画する
     calendar(events=calendar_events, options=calendar_options)
 
-# --- タブ3: 記録する（LINE通知付き） ---
+# --- タブ3: 記録する（Messaging API対応） ---
 with tab3:
     st.header(f"{user} の記録入力")
     date_input = st.date_input("日付を選択", today)
@@ -137,10 +124,12 @@ with tab3:
         try:
             worksheet.append_row(new_row)
             
-            # LINE通知
+            # LINE通知メッセージ作成
             emoji = "💪" if user == "士温" else "🌸"
-            message = f"\n{emoji} {user} が記録しました！\n\n📝 メニュー: {menu_choice}\n🔢 回数: {value} {unit}\n📅 日付: {date_str}"
-            send_line_notify(message)
+            message = f"{emoji} {user} が記録しました！\n\n📝 メニュー: {menu_choice}\n🔢 回数: {value} {unit}\n📅 日付: {date_str}"
+            
+            # 送信実行
+            send_line_broadcast(message)
             
             st.success("✅ 保存＆LINE通知しました！")
             st.balloons()
@@ -154,6 +143,5 @@ with tab4:
     if not df.empty:
         st.subheader("👤 個人の累計")
         st.table(df.pivot_table(index='種目', columns='名前', values='数値', aggfunc='sum').fillna(0).astype(int))
-        
         with st.expander("詳細履歴を見る"):
             st.dataframe(df[['日付_str', '名前', '種目', '数値']].sort_values('日付_str', ascending=False))
